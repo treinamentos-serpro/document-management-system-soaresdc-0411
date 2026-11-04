@@ -9,20 +9,36 @@ function createError(status, code, message) {
   return error;
 }
 
+function createNotFoundError() {
+  return createError(404, 'DOCUMENT_NOT_FOUND', 'Documento não encontrado.');
+}
+
+function createFileRequiredError() {
+  return createError(400, 'FILE_REQUIRED', 'Envie um arquivo não vazio no campo "file".');
+}
+
+function createStorageError(action) {
+  return createError(500, 'STORAGE_ERROR', `Não foi possível ${action} o documento.`);
+}
+
 function toPublicDocument(document) {
   const { storageKey, ...publicDocument } = document;
   return publicDocument;
 }
 
-async function upload(file) {
-  if (!file || file.size === 0) {
-    if (file) {
-      await documentsRepository.removeFile(file.filename);
-    }
-    throw createError(400, 'FILE_REQUIRED', 'Envie um arquivo não vazio no campo "file".');
+async function validateUploadedFile(file) {
+  if (!file) {
+    throw createFileRequiredError();
   }
 
-  const document = {
+  if (file.size === 0) {
+    await documentsRepository.removeFile(file.filename);
+    throw createFileRequiredError();
+  }
+}
+
+function createDocumentMetadata(file) {
+  return {
     id: file.filename,
     originalName: file.originalname,
     size: file.size,
@@ -30,14 +46,42 @@ async function upload(file) {
     owner: DEMO_OWNER,
     storageKey: file.filename
   };
+}
 
+async function persistDocument(document) {
   try {
     await documentsRepository.save(document);
-    return toPublicDocument(document);
-  } catch (error) {
-    await documentsRepository.removeFile(file.filename);
-    throw createError(500, 'STORAGE_ERROR', 'Não foi possível registrar o documento.');
+  } catch {
+    await documentsRepository.removeFile(document.storageKey);
+    throw createStorageError('registrar');
   }
+}
+
+async function findDocument(id) {
+  const document = await documentsRepository.findById(id);
+  if (!document) {
+    throw createNotFoundError();
+  }
+  return document;
+}
+
+async function resolveFilePath(document) {
+  try {
+    return await documentsRepository.getFilePath(document.storageKey);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw createNotFoundError();
+    }
+    throw createStorageError('ler');
+  }
+}
+
+async function upload(file) {
+  await validateUploadedFile(file);
+
+  const document = createDocumentMetadata(file);
+  await persistDocument(document);
+  return toPublicDocument(document);
 }
 
 async function list() {
@@ -46,20 +90,9 @@ async function list() {
 }
 
 async function getDownload(id) {
-  const document = await documentsRepository.findById(id);
-  if (!document) {
-    throw createError(404, 'DOCUMENT_NOT_FOUND', 'Documento não encontrado.');
-  }
-
-  try {
-    const filePath = await documentsRepository.getFilePath(document.storageKey);
-    return { document: toPublicDocument(document), filePath };
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      throw createError(404, 'DOCUMENT_NOT_FOUND', 'Documento não encontrado.');
-    }
-    throw createError(500, 'STORAGE_ERROR', 'Não foi possível ler o documento.');
-  }
+  const document = await findDocument(id);
+  const filePath = await resolveFilePath(document);
+  return { document: toPublicDocument(document), filePath };
 }
 
 module.exports = { upload, list, getDownload };

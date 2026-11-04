@@ -11,16 +11,65 @@
 // usando multer com diskStorage. Não utilize provedores externos.
 
 const express = require('express');
+const documentsRoutes = require('./routes/documents.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Endpoint de verificação de saúde. As demais rotas (/upload, /documents,
-// /documents/:id/download) serão implementadas durante o Passo 2.
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
+});
+
+app.use('/', documentsRoutes);
+
+app.use((req, res) => {
+  res.status(404).json({
+    error: {
+      code: 'NOT_FOUND',
+      message: 'Rota não encontrada.'
+    }
+  });
+});
+
+app.use((error, req, res, next) => {
+  if (res.headersSent) {
+    return next(error);
+  }
+
+  if (error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      error: {
+        code: 'FILE_TOO_LARGE',
+        message: 'O arquivo excede o limite permitido.'
+      }
+    });
+  }
+
+  if (error.name === 'MulterError') {
+    return res.status(400).json({
+      error: {
+        code: 'FILE_REQUIRED',
+        message: 'Envie somente um arquivo no campo "file".'
+      }
+    });
+  }
+
+  if (['EACCES', 'ENOSPC', 'EIO'].includes(error.code)) {
+    return res.status(500).json({
+      error: {
+        code: 'STORAGE_ERROR',
+        message: 'Não foi possível acessar o armazenamento local.'
+      }
+    });
+  }
+
+  const status = Number.isInteger(error.status) ? error.status : 500;
+  const code = error.code || 'INTERNAL_ERROR';
+  const message = status >= 500 ? 'Ocorreu um erro interno.' : error.message;
+
+  return res.status(status).json({ error: { code, message } });
 });
 
 if (require.main === module) {
